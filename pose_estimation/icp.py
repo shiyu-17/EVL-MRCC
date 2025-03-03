@@ -73,6 +73,13 @@ def compute_icp(source_pcd, target_pcd):
     )
     return icp_result
 
+def preprocess_point_cloud(pcd, voxel_size=0.01):
+    # 降采样
+    pcd_down = pcd.voxel_down_sample(voxel_size)
+    # 去噪
+    pcd_clean, _ = pcd_down.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+    return pcd_clean
+
 if __name__ == "__main__":
     # 从文件加载相机内参
     intrinsics_file = "./41069021_305.377.pincam"  # 替换为你的内参文件路径
@@ -101,14 +108,17 @@ if __name__ == "__main__":
     assert depth_image1.shape == (img_height, img_width)
 
     # 打印计算位姿所用的图像文件名
-    print(f"计算相对位姿，使用的两张图像: {rgb_image1}, {rgb_image2}")
+    # print(f"计算相对位姿，使用的两张图像: {rgb_image1}, {rgb_image2}")
 
     # 转换为点云
     pcd1 = depth_to_point_cloud(rgb_image1, depth_image1, intrinsics)
     pcd2 = depth_to_point_cloud(rgb_image2, depth_image2, intrinsics)
 
+    pcd1 = preprocess_point_cloud(pcd1)
+    pcd2 = preprocess_point_cloud(pcd2)
+
     # 可视化点云（可选）
-    o3d.visualization.draw_geometries([pcd1, pcd2])
+    # o3d.visualization.draw_geometries([pcd1, pcd2])
 
     # 使用 ICP 计算相对位姿 
     icp_result = compute_icp(pcd1, pcd2)
@@ -117,5 +127,5 @@ if __name__ == "__main__":
     print(icp_result.transformation)
 
     # 可视化配准结果
-    pcd1.transform(icp_result.transformation)
-    o3d.visualization.draw_geometries([pcd1, pcd2])
+    # pcd1.transform(icp_result.transformation)
+    # o3d.visualization.draw_geometries([pcd1, pcd2])
