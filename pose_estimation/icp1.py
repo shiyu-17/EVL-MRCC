@@ -73,13 +73,6 @@ def compute_icp(source_pcd, target_pcd):
     )
     return icp_result
 
-def preprocess_point_cloud(pcd, voxel_size=0.01):
-    # 降采样
-    pcd_down = pcd.voxel_down_sample(voxel_size)
-    # 去噪
-    pcd_clean, _ = pcd_down.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-    return pcd_clean
-
 if __name__ == "__main__":
     # 从文件加载相机内参
     intrinsics_file = "./41069021_305.377.pincam"  # 替换为你的内参文件路径
@@ -114,9 +107,6 @@ if __name__ == "__main__":
     pcd1 = depth_to_point_cloud(rgb_image1, depth_image1, intrinsics)
     pcd2 = depth_to_point_cloud(rgb_image2, depth_image2, intrinsics)
 
-    pcd1 = preprocess_point_cloud(pcd1)
-    pcd2 = preprocess_point_cloud(pcd2)
-
     # 可视化点云（可选）
     # o3d.visualization.draw_geometries([pcd1, pcd2])
 
@@ -129,3 +119,27 @@ if __name__ == "__main__":
     # 可视化配准结果
     # pcd1.transform(icp_result.transformation)
     # o3d.visualization.draw_geometries([pcd1, pcd2])
+
+
+    # 计算相对位姿的均方误差
+
+    # 提取计算得到的变换矩阵（注意Open3D的变换矩阵是4x4的齐次坐标）
+    computed_transformation = icp_result.transformation
+    computed_matrix = np.asarray(computed_transformation)  # 转换为numpy数组
+
+    # 定义真实变换矩阵（注意行列顺序与实际计算结果是否匹配）
+    true_T = np.array([
+        [0.99981151, 0.01853355, -0.00578381, 0.00737292],
+        [-0.0145849,  0.91360526,  0.40634063,  0.02877406],
+        [0.01281505, -0.40617969,  0.91370336,  0.37641721],
+        [0.0,         0.0,         0.0,         1.0        ]
+    ])
+
+    # 选择要比较的有效区域（前3行前4列，排除最后一列的齐次项）
+    selected_computed = computed_matrix[:3, :4]
+    selected_true = true_T[:3, :4]
+
+    # 计算均方误差
+    mse = np.mean((selected_computed - selected_true) ** 2)
+
+    print(f"\n相对位姿MSE: {mse:.6f}")
