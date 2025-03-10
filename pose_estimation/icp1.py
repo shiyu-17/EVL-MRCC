@@ -25,7 +25,7 @@ def depth_to_point_cloud(rgb_image, depth_image, intrinsics):
 
     # 创建像素网格
     u, v = np.meshgrid(np.arange(w), np.arange(h))
-    z = depth_image / 1000.0  # 假设深度图单位是毫米，转换为米
+    z =  - depth_image / 1000.0  # 假设深度图单位是毫米，转换为米
     x = (u - cx) * z / fx
     y = (v - cy) * z / fy
 
@@ -53,8 +53,8 @@ def compute_icp(source_pcd, target_pcd):
     """
     # Step 1: 计算法向量
     print("计算目标点云法向量...")
-    target_pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
-    
+    # target_pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+    target_pcd.estimate_normals ( search_param = o3d . geometry . KDTreeSearchParamHybrid ( radius = 0.2 , max_nn = 50 ) )
     # Step 2: 确保法向量方向与点云一致
     target_pcd.orient_normals_consistent_tangent_plane(k=30)
 
@@ -73,6 +73,34 @@ def compute_icp(source_pcd, target_pcd):
     )
     return icp_result
 
+
+# 计算损失---------------------
+
+def rotation_error(R_true, R_est):
+    """计算旋转矩阵的角度误差"""
+    R_diff = R_true.dot(R_est.T)  # R_true^T * R_est
+    trace = np.trace(R_diff)
+    cos_theta = (trace - 1) / 2
+    return np.arccos(cos_theta)
+
+def translation_error(t_true, t_est):
+    """计算平移向量的欧氏距离误差"""
+    return np.linalg.norm(t_est - t_true)
+
+def compute_errors(T_true, T_est):
+    """计算相对位姿的旋转和平移误差"""
+    R_true = T_true[:3, :3]
+    t_true = T_true[:3, 3]
+    
+    R_est = T_est[:3, :3]
+    t_est = T_est[:3, 3]
+    
+    rot_err = rotation_error(R_true, R_est)
+    trans_err = translation_error(t_true, t_est)
+    
+    return rot_err, trans_err
+
+    
 if __name__ == "__main__":
     # 从文件加载相机内参
     intrinsics_file = "./41069021_305.377.pincam"  # 替换为你的内参文件路径
@@ -127,19 +155,24 @@ if __name__ == "__main__":
     computed_transformation = icp_result.transformation
     computed_matrix = np.asarray(computed_transformation)  # 转换为numpy数组
 
-    # 定义真实变换矩阵（注意行列顺序与实际计算结果是否匹配）
+    # 定义真实变换矩阵（注意坐标系一致性）
     true_T = np.array([
         [0.99981151, 0.01853355, -0.00578381, 0.00737292],
         [-0.0145849,  0.91360526,  0.40634063,  0.02877406],
         [0.01281505, -0.40617969,  0.91370336,  0.37641721],
-        [0.0,         0.0,         0.0,         1.0        ]
+        [0,         0,         0,         1.0        ]
     ])
+    
+    # 计算ICP结果
+    icp_result = compute_icp(pcd1, pcd2)
+    computed_T = np.asarray(icp_result.transformation)
+    
+    # 计算误差
+    rotation_err, translation_err = compute_errors(true_T, computed_T)
+    
+    print(f"\n位姿估计误差:")
+    print(f"旋转误差: {rotation_err:.4f} 弧度 ({np.degrees(rotation_err):.2f} 度)")
+    print(f"平移误差: {translation_err:.4f} 米")
+    
 
-    # 选择要比较的有效区域（前3行前4列，排除最后一列的齐次项）
-    selected_computed = computed_matrix[:3, :4]
-    selected_true = true_T[:3, :4]
-
-    # 计算均方误差
-    mse = np.mean((selected_computed - selected_true) ** 2)
-
-    print(f"\n相对位姿MSE: {mse:.6f}")
+    
