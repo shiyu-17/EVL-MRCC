@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 
+# ------------------------- 确保所有函数在使用前定义 -------------------------
 def enhance_contrast(img):
     """图像对比度增强"""
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -17,36 +18,81 @@ def rotation_error(R1, R2):
     trace = np.trace(R1.T @ R2)
     return np.rad2deg(np.arccos(np.clip((trace - 1) / 2, -1.0, 1.0)))
 
-def translation_euclidean_error(t1, t2):
-    """计算平移向量的欧式距离误差（单位：与输入一致）"""
-    return np.linalg.norm(t1 - t2)
+def translation_direction_error(t1, t2):
+    """计算平移方向的角度误差（单位：度）"""
+    norm1 = np.linalg.norm(t1)
+    norm2 = np.linalg.norm(t2)
+    if norm1 < 1e-6 or norm2 < 1e-6:
+        return 180.0
+    t1_normalized = t1 / norm1
+    t2_normalized = t2 / norm2
+    dot_product = np.dot(t1_normalized, t2_normalized)
+    angle_rad = np.arccos(np.clip(dot_product, -1.0, 1.0))
+    return np.rad2deg(angle_rad)
+
+def compute_reprojection_error(T, K, matches, kp1, kp2):
+    """计算重投影误差（单位：像素）"""
+    if len(matches) == 0:
+        print("警告：无匹配点，无法计算重投影误差。")
+        return float('inf')
+    
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 2)
+    
+    if len(src_pts) == 0 or len(dst_pts) == 0:
+        print("警告：点坐标为空，无法计算重投影误差。")
+        return float('inf')
+    
+    try:
+        src_norm = cv2.undistortPoints(src_pts.reshape(-1, 1, 2), K, None)
+        dst_norm = cv2.undistortPoints(dst_pts.reshape(-1, 1, 2), K, None)
+    except cv2.error as e:
+        print(f"OpenCV错误：{e}")
+        return float('inf')
+    
+    R = T[:3, :3]
+    t = T[:3, 3].reshape(3, 1)
+    
+    points_4d = cv2.triangulatePoints(
+        np.eye(3, 4), 
+        np.hstack((R, t)),
+        src_norm, 
+        dst_norm
+    )
+    points_3d = points_4d[:3] / points_4d[3]
+    
+    rvec, _ = cv2.Rodrigues(R)
+    
+    projected_pts, _ = cv2.projectPoints(points_3d.T,
+                                       rvec,
+                                       t,
+                                       K,
+                                       None)
+    projected_pts = projected_pts.squeeze()
+    
+    errors = np.linalg.norm(projected_pts - dst_pts, axis=1)
+    return np.mean(errors)
 
 def compute_error(T_relative, T_icp, K, matches, kp1, kp2):
-    """计算综合误差（已添加尺度缩放处理）"""
+    """计算综合误差"""
+    if len(matches) == 0:
+        print("无匹配点，无法计算误差。")
+        return 180.0, 180.0, float('inf')
+    
     R_relative = T_relative[:3, :3]
     t_relative = T_relative[:3, 3]
     R_icp = T_icp[:3, :3]
     t_icp = T_icp[:3, 3]
     
-    # 计算旋转误差（保持不变）
     rotation_err = rotation_error(R_relative, R_icp)
+    direction_err = translation_direction_error(t_relative, t_icp)
+    reproj_err = compute_reprojection_error(T_relative, K, matches, kp1, kp2)
     
-    # 计算带尺度缩放的平移误差
-    t_relative_norm = np.linalg.norm(t_relative)
-    t_icp_norm = np.linalg.norm(t_icp)
-    
-    if t_relative_norm < 1e-6 or t_icp_norm < 1e-6:
-        translation_err = np.inf  # 处理零向量特殊情况
-    else:
-        # 将估计的平移向量缩放到真实尺度
-        scale_factor = t_icp_norm / t_relative_norm
-        t_relative_scaled = t_relative * scale_factor
-        translation_err = np.linalg.norm(t_relative_scaled - t_icp)
-    
-    print("\n误差分析:")
+    print("\n综合误差分析:")
     print(f"旋转角度误差: {rotation_err:.4f} 度")
-    print(f"平移误差: {translation_err:.4f} 米")
-    return rotation_err, translation_err
+    print(f"平移方向误差: {direction_err:.4f} 度")
+    print(f"平均重投影误差: {reproj_err:.4f} 像素")
+    return rotation_err, direction_err, reproj_err
 
 def get_feature_matches(img1, img2):
     """获取图像之间的特征匹配"""
@@ -57,7 +103,7 @@ def get_feature_matches(img1, img2):
     flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=100))
     matches = flann.knnMatch(des1, des2, k=2)
 
-    ratio_thresh = 0.6
+    ratio_thresh = 0.7
     good_matches = [m for m, n in matches if m.distance < ratio_thresh * n.distance]
     
     return good_matches, kp1, kp2
@@ -91,17 +137,18 @@ def visualize_matches(img1, img2, kp1, kp2, final_matches):
                                  flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
     return result_img
 
+# ------------------------- 主函数 -------------------------
 def sift_feature_matching():
     fx, fy, cx, cy = 211.949, 211.949, 127.933, 95.9333
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
     
-    img1 = cv2.imread("./41069021_305.377.png", cv2.IMREAD_UNCHANGED)
-    img2 = cv2.imread("./41069021_306.360.png", cv2.IMREAD_UNCHANGED)
+    img1 = cv2.imread("./41069043_2896.133.png", cv2.IMREAD_UNCHANGED)
+    img2 = cv2.imread("./41069043_2896.633.png", cv2.IMREAD_UNCHANGED)
 
     if img1 is None or img2 is None:
         raise ValueError("图像加载失败，请检查文件路径。")
 
-    gray1 = preprocess_image(img1)  # 此处调用 preprocess_image
+    gray1 = preprocess_image(img1)
     gray2 = preprocess_image(img2)
     
     good_matches, kp1, kp2 = get_feature_matches(gray1, gray2)
@@ -111,28 +158,32 @@ def sift_feature_matching():
     print(T)
     
     if T is not None:
-        T_true = np.array([[0.99981151, 0.01853355, -0.00578381, 0.00737292],
-                          [-0.0145849, 0.91360526, 0.40634063, 0.02877406],
-                          [0.01281505, -0.40617969, 0.91370336, 0.37641721],
-                          [0, 0, 0, 1]])
+        T_true = np.array([[0.997918, 0.002802, 0.064431, 0.020627],
+                   [0.004117, 0.994251, -0.106995, -0.022146],
+                   [-0.06436, 0.107037, 0.99217, 0.006211],
+                   [0, 0, 0, 1]])
         print("\n真实位姿：")
         print(T_true)
         matches_mask = mask.ravel().astype(bool)
         final_matches = [m for m, flag in zip(good_matches, matches_mask) if flag]
-        compute_error(T, T_true, K, final_matches, kp1, kp2)
+        
+        if len(final_matches) == 0:
+            print("几何验证后无匹配点，无法计算误差。")
+        else:
+            compute_error(T, T_true, K, final_matches, kp1, kp2)
 
     else:
         print("位姿估计失败：匹配点不足")
         return
 
-    result_img = visualize_matches(img1, img2, kp1, kp2, final_matches)
+    result_img = visualize_matches(img1, img2, kp1, kp2, final_matches if T is not None else [])
     print("\n特征点统计：")
     print(f"图像1特征点: {len(kp1)}, 图像2特征点: {len(kp2)}")
-    print(f"初步匹配: {len(good_matches)}, 几何验证后: {len(final_matches)}")
+    print(f"初步匹配: {len(good_matches)}, 几何验证后: {len(final_matches) if T is not None else 0}")
 
-    cv2.imshow('Feature Matching', result_img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # cv2.imshow('Feature Matching', result_img)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     try:

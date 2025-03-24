@@ -2,11 +2,11 @@ import numpy as np
 import cv2
 
 # 给定的旋转向量和平移向量
-rotation_vector_1 = np.array([2.1562335342945733, -2.117006787798841, 0.24537857547787853])
-translation_vector_1 = np.array([0.0519758, 0.0541097, 0.0481458])
+rotation_vector_1 = np.array([2.327592958220677 ,2.0173072386484425, 0.18297520284276966])
+translation_vector_1 = np.array([0.0859419, 0.1264 ,-0.168066])
 
-rotation_vector_2 = np.array([1.8937752059516033, -1.8785065570788495, 0.6343465703380557])
-translation_vector_2 = np.array([0.0600633, 0.0970145, 0.399096])
+rotation_vector_2 = np.array([2.3579397410461005 ,1.9944091778725408, 0.12878042999005843])
+translation_vector_2 = np.array([0.100422, 0.122491, -0.127448])
 
 # 将旋转向量转换为旋转矩阵
 R1, _ = cv2.Rodrigues(rotation_vector_1)

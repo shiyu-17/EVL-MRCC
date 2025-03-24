@@ -90,7 +90,7 @@ def get_feature_matches(img1, img2):
     flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=100))
     matches = flann.knnMatch(des1, des2, k=2)
 
-    ratio_thresh = 0.6
+    ratio_thresh = 0.8
     good_matches = [m for m, n in matches if m.distance < ratio_thresh * n.distance]
     
     return good_matches, kp1, kp2
@@ -129,8 +129,8 @@ def sift_feature_matching():
     fx, fy, cx, cy = 211.949, 211.949, 127.933, 95.9333
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
     
-    img1 = cv2.imread("./41069021_305.377.png", cv2.IMREAD_UNCHANGED)
-    img2 = cv2.imread("./41069021_306.360.png", cv2.IMREAD_UNCHANGED)
+    img1 = cv2.imread("./41125700_3813.347.png", cv2.IMREAD_UNCHANGED)
+    img2 = cv2.imread("./41125700_3813.846.png", cv2.IMREAD_UNCHANGED)
 
     if img1 is None or img2 is None:
         raise ValueError("图像加载失败，请检查文件路径。")
@@ -145,10 +145,10 @@ def sift_feature_matching():
     print(T)
     
     if T is not None:
-        T_true = np.array([[0.99981151, 0.01853355, -0.00578381, 0.00737292],
-                          [-0.0145849, 0.91360526, 0.40634063, 0.02877406],
-                          [0.01281505, -0.40617969, 0.91370336, 0.37641721],
-                          [0, 0, 0, 1]])
+        T_true = np.array([[ 0.999226,  0.02439,   0.030866,  0.016651],
+                   [-0.024926,  0.999543,  0.01709,   0.001163],
+                   [-0.030435, -0.017846,  0.999377,  0.045385],
+                   [ 0.,        0.,        0.,        1.]])
         print("\n真实位姿：")
         print(T_true)
         matches_mask = mask.ravel().astype(bool)
@@ -164,9 +164,9 @@ def sift_feature_matching():
     print(f"图像1特征点: {len(kp1)}, 图像2特征点: {len(kp2)}")
     print(f"初步匹配: {len(good_matches)}, 几何验证后: {len(final_matches)}")
 
-    # cv2.imshow('Feature Matching', result_img)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
+    cv2.imshow('Feature Matching', result_img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     try:
