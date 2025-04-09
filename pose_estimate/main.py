@@ -43,7 +43,7 @@ def compute_error(T_relative, T_icp, K, matches, kp1, kp2):
         t_relative_scaled = t_relative * scale_factor
         translation_err = np.linalg.norm(t_relative_scaled - t_icp)
     
-    print("\n误差分析:")
+    print("\nRANSAC 误差分析:")
     print(f"旋转角度误差: {rotation_err:.4f} 度")
     print(f"平移误差: {translation_err:.4f} 米")
     return rotation_err, translation_err
@@ -95,8 +95,8 @@ def sift_feature_matching():
     fx, fy, cx, cy = 211.949, 211.949, 127.933, 95.9333
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
     
-    img1 = cv2.imread("./41069021_305.377.png", cv2.IMREAD_UNCHANGED)
-    img2 = cv2.imread("./41069021_306.360.png", cv2.IMREAD_UNCHANGED)
+    img1 = cv2.imread("/Users/shiyu/mycode/EVL-MRCC/images/41069021_305.377.png", cv2.IMREAD_UNCHANGED)
+    img2 = cv2.imread("/Users/shiyu/mycode/EVL-MRCC/images/41069021_306.360.png", cv2.IMREAD_UNCHANGED)
 
     if img1 is None or img2 is None:
         raise ValueError("图像加载失败，请检查文件路径。")

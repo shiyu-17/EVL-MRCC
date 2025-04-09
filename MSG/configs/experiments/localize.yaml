@@ -1,0 +1,45 @@
+# Localization configuration file
+dataset_path: '/home/dell3/lsy/MSG/data/msg'  # Path to the dataset
+device: 1  # Device to use for inference (1 for GPU, or 0 for CUDA-enabled device, cpu for CPU)
+pp_threshold: 0.3  # Place threshold for matching
+
+eval_split: mini-val  # Evaluation split (e.g., mini-val, real, etc.)
+
+# for evaluation
+eval_output_dir: '/home/dell3/lsy/MSG/exp-results/aomsg/LOG_DATE'  # Path to the output directory for evaluation results
+eval_chkpt: aomsg-s-4.pth  # Model checkpoint for evaluation (set to null if no checkpoint)
+save_every: True  # Whether to save results for each video separately
+vis_det: True  # If set to True, visualize the detection results
+
+num_workers: 8  # Number of workers for data loading
+eval_bs: 64  # Batch size for evaluation
+log_every: 1  # Log progress every n steps
+
+# Object detection settings
+detector:
+  model: grounding-dino  # Object detection model (e.g., grounding-dino, fasterrcnn, etc.)
+  num_classes: 18  # Number of object classes
+  freeze: True  # Freeze the weights of the detector
+  weights: # '/home/hri3090/lsy/MSG/weights/detection/groundingdino_swint_ogc.pth' # DEFAULT  # Pretrained weights for the detector
+  pre_saved:  True  # Whether the detector's weights are pre-saved
+  result_path:  "/home/dell3/lsy/MSG/exp-results/gdino-direct"  # Path for saving detection results
+
+# Embedding settings for object and place localization
+obj_embedder:
+  model: "dinov2-base"  # Model for object embeddings (e.g., dinov2-base, convnext-tiny-224, etc.)
+  weights: DEFAULT  # Pretrained weights for the object embedder
+  freeze: True  # Freeze the object embedder weights
+  output_type: feature  # Type of output: feature (e.g., mean, cls, feature)
+
+place_embedder:
+  model: "dinov2-base"  # Model for place embeddings
+  weights: DEFAULT  # Pretrained weights for the place embedder
+  freeze: True  # Freeze the place embedder weights
+  output_type: feature  # Output type: feature
+
+# Associator settings (for associating objects and places)
+associator:
+  model: "AoMSG-S-4"  # Model used for association (e.g., AoMSG-S-4, AoMSG-S-2, etc.)
+  object_dim: 768  # Dimension for object embeddings
+  place_dim: 768  # Dimension for place embeddings
+  output_dim: 1024  # Output dimension for the model

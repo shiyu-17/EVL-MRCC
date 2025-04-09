@@ -75,9 +75,9 @@ def compute_error(T_relative, T_icp, K, matches, kp1, kp2):
     direction_err = translation_direction_error(t_relative, t_icp)
     reproj_err = compute_reprojection_error(T_relative, K, matches, kp1, kp2)
     
-    print("\n综合误差分析:")
+    print("\n2D-2D误差分析:")
     print(f"旋转角度误差: {rotation_err:.4f} 度")
-    print(f"平移方向误差: {direction_err:.4f} 度")
+    print(f"平移方向误差: {direction_err:.4f} cm")
     print(f"平均重投影误差: {reproj_err:.4f} 像素")
     return rotation_err, direction_err, reproj_err
 
