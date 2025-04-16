@@ -1,3 +1,4 @@
+# sift + ransac 计算两张图片间相对位姿
 import cv2
 import numpy as np
 
@@ -95,8 +96,8 @@ def sift_feature_matching():
     fx, fy, cx, cy = 211.949, 211.949, 127.933, 95.9333
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
     
-    img1 = cv2.imread("/Users/shiyu/mycode/EVL-MRCC/images/41069021_305.377.png", cv2.IMREAD_UNCHANGED)
-    img2 = cv2.imread("/Users/shiyu/mycode/EVL-MRCC/images/41069021_306.360.png", cv2.IMREAD_UNCHANGED)
+    img1 = cv2.imread("/Users/shiyu/mycode/EVL-MRCC/images/44358452_43500.602.png", cv2.IMREAD_UNCHANGED)
+    img2 = cv2.imread("/Users/shiyu/mycode/EVL-MRCC/images/44358452_43501.085.png", cv2.IMREAD_UNCHANGED)
 
     if img1 is None or img2 is None:
         raise ValueError("图像加载失败，请检查文件路径。")
@@ -111,10 +112,14 @@ def sift_feature_matching():
     print(T)
     
     if T is not None:
-        T_true = np.array([[0.99981151, 0.01853355, -0.00578381, 0.00737292],
-                          [-0.0145849, 0.91360526, 0.40634063, 0.02877406],
-                          [0.01281505, -0.40617969, 0.91370336, 0.37641721],
-                          [0, 0, 0, 1]])
+        T_true = np.array([[ 0.99968,  -0.025151,  0.002634, -0.002958],
+ [ 0.024646 , 0.992321,  0.121207 , 0.047966],
+ [-0.005662, -0.121104 , 0.992624,  0.055945],
+ [ 0,        0,        0,        1      ]])
+        # T_true = np.array([[0.99981151, 0.01853355, -0.00578381, 0.00737292],
+        #                   [-0.0145849, 0.91360526, 0.40634063, 0.02877406],
+        #                   [0.01281505, -0.40617969, 0.91370336, 0.37641721],
+        #                   [0, 0, 0, 1]])
         print("\n真实位姿：")
         print(T_true)
         matches_mask = mask.ravel().astype(bool)

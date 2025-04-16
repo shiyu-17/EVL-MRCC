@@ -1,0 +1,9 @@
+numpy>=1.19.0
+opencv-python>=4.5.0
+torch>=1.7.0
+torchvision>=0.8.0
+groundingdino-py==0.1.0
+segment-anything>=1.0
+supervision>=0.13.0
+matplotlib>=3.4.0
+pillow>=8.0.0 
