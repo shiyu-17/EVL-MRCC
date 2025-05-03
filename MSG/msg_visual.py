@@ -1,3 +1,6 @@
+# 在4个数据集上进行测试并检索
+# {data_split_dir}/{video_id}/{video_id}_frames/video_id_{frame_id}.png
+#python msg_evaluator.py --video_id 001 --model_path /home/dell3/lsy/MSG/exp-results/aomsg/LOG_DATE --split test --device 0 --output_dir ./evaluation_results/001
 import os
 import time
 import numpy as np

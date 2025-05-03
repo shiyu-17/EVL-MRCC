@@ -1,3 +1,4 @@
+# python msg_localizer.py  --video_id 001 --query_image_path /home/dell3/lsy/MSG/data/msg/test/001/001_frames/001_000071.png --split test
 import os
 import json
 import torch
