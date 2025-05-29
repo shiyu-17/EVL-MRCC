@@ -75,12 +75,6 @@ def load_sam_model(sam_checkpoint, device=None):
     # 确保device不为空
     if device is None or device == "":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # 如果device是纯数字，转换为cuda:N格式
-    if isinstance(device, str) and device.isdigit():
-        device = f"cuda:{device}"
-        
-    print(f"使用设备: {device} 加载SAM模型")
     sam = sam_model_registry["vit_h"](checkpoint=sam_checkpoint)
     sam.to(device=device)
     return SamPredictor(sam)
@@ -1523,7 +1517,7 @@ def main():
     parser.add_argument("--dataset-mode", action="store_true",
                         help="是否使用数据集评估模式")
     parser.add_argument("--dataset-type", type=str, default="custom",
-                        help="数据集类型, 可选 'cambridge' 或 'custom'")
+                        help="数据集类型, 可选 'cambridge', 'custom' 或 '7scenes'")
     parser.add_argument("--dataset-dir", type=str, default="",
                         help="数据集根目录")
     parser.add_argument("--scene", type=str, default="ShopFacade",
@@ -1575,7 +1569,7 @@ def main():
     # 确保device参数不为空
     if args.device == "":
         if torch.cuda.is_available():
-            args.device = f"cuda:{args.gpu}"  # 这里会将--gpu 6转换为"cuda:6"
+            args.device = f"cuda:{args.gpu}"
         else:
             args.device = "cpu"
     
@@ -1605,8 +1599,15 @@ def main():
                 dino_config, dino_weights, sam_weights,
                 args.text_prompts, args.device, args.frame_interval, args.max_pairs, args.max_rot_err, args.max_trans_err
             )
+        elif args.dataset_type == "7scenes":
+            # 7-Scenes数据集评估
+            evaluate_7scenes_dataset(
+                args.dataset_dir, args.output_dir,
+                dino_config, dino_weights, sam_weights,
+                args.text_prompts, args.device, args.frame_interval, args.max_pairs, args.max_rot_err, args.max_trans_err
+            )
         else:
-            print(f"错误：不支持的数据集类型 '{args.dataset_type}'，支持的选项: 'cambridge', 'custom'")
+            print(f"错误：不支持的数据集类型 '{args.dataset_type}'，支持的选项: 'cambridge', 'custom', '7scenes'")
             return
     else:
         # 单对图像处理模式
@@ -1620,6 +1621,224 @@ def main():
             dino_config, dino_weights, sam_weights,
             args.text_prompts, args.device
         )
+
+def evaluate_7scenes_dataset(dataset_dir, output_dir, dino_config, dino_weights, sam_weights, 
+                          text_prompts=None, device=None, frame_interval=1, max_pairs=0, 
+                          max_rot_err=4.0, max_trans_err=2.0):
+    """评估7-Scenes数据集的所有7个场景
+    
+    Args:
+        dataset_dir: 7-Scenes数据集的根目录
+        output_dir: 输出结果的目录
+        dino_config, dino_weights, sam_weights: 模型配置和权重
+        text_prompts: 文本提示列表
+        device: 运行设备
+        frame_interval: 帧间隔，默认为1（处理所有连续帧）
+        max_pairs: 最大处理的图像对数量，0表示无限制
+        max_rot_err: 最大允许的旋转误差（度）
+        max_trans_err: 最大允许的平移误差（米）
+    """
+    # 7-Scenes场景列表
+    scenes = ["chess", "fire", "heads", "office", "pumpkin", "redkitchen", "stairs"]
+    
+    # 创建输出目录
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+    
+    # 创建总结果文件
+    summary_file = output_dir / "7scenes_all_results.txt"
+    with open(summary_file, "w") as f:
+        f.write(f"7-Scenes数据集全部场景评估结果\n")
+        f.write("=====================================\n\n")
+        f.write(f"帧间隔: {frame_interval}, 每个场景最大图像对数量: {max_pairs if max_pairs > 0 else '无限制'}\n")
+        f.write(f"误差阈值筛选: 旋转误差 <= {max_rot_err}度, 平移误差 <= {max_trans_err}米\n\n")
+    
+    # 存储所有场景的汇总结果
+    all_scenes_results = {
+        "standard": {"rotation_errors": [], "translation_errors": []},
+        "hybrid": {"rotation_errors": [], "translation_errors": []},
+        "best": {"rotation_errors": [], "translation_errors": [], "method_counts": {"standard": 0, "hybrid": 0}}
+    }
+    
+    # 保存每个场景的详细摘要信息
+    scene_summaries = {}
+    
+    # 处理每个场景
+    for scene in scenes:
+        print(f"\n============ 处理7-Scenes场景: {scene} ============")
+        
+        scene_dir = Path(dataset_dir) / scene
+        scene_output_dir = output_dir / scene
+        
+        if not scene_dir.exists():
+            print(f"警告: 场景目录 {scene_dir} 不存在，跳过此场景")
+            continue
+        
+        # 为7-Scenes场景选择适合的文本提示
+        scene_text_prompts = text_prompts
+        # 如果未指定文本提示，使用适合室内场景的提示
+        if scene_text_prompts is None or len(scene_text_prompts) == 0:
+            scene_text_prompts = [
+                "furniture . room structure . objects",
+                "walls . doors . windows . desk",
+                "indoor objects . corners . structures"
+            ]
+        
+        try:
+            # 评估当前场景
+            scene_summary = evaluate_custom_dataset(
+                str(scene_dir), str(scene_output_dir),
+                dino_config, dino_weights, sam_weights,
+                scene_text_prompts, device, frame_interval, max_pairs, max_rot_err, max_trans_err
+            )
+            
+            # 保存场景摘要结果
+            scene_summaries[scene] = scene_summary
+            
+            # 将当前场景的误差数据添加到汇总结果中
+            for method in ["standard", "hybrid", "best"]:
+                if scene_summary[method]["pairs_count"] > 0:
+                    all_scenes_results[method]["rotation_errors"].extend(
+                        [scene_summary[method]["rot_mean"]] * scene_summary[method]["pairs_count"]
+                    )
+                    all_scenes_results[method]["translation_errors"].extend(
+                        [scene_summary[method]["trans_mean"]] * scene_summary[method]["pairs_count"]
+                    )
+                    
+                    # 对于best方法，还需统计方法选择计数
+                    if method == "best":
+                        all_scenes_results[method]["method_counts"]["standard"] += scene_summary[method]["standard_count"]
+                        all_scenes_results[method]["method_counts"]["hybrid"] += scene_summary[method]["hybrid_count"]
+            
+        except Exception as e:
+            print(f"处理场景 {scene} 时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            with open(summary_file, "a") as f:
+                f.write(f"\n场景 {scene} 处理出错: {e}\n")
+    
+    # 计算所有场景的综合统计结果
+    all_scenes_summary = {}
+    for method in ["standard", "hybrid", "best"]:
+        if not all_scenes_results[method]["rotation_errors"]:
+            all_scenes_summary[method] = {
+                "pairs_count": 0,
+                "rot_median": float('nan'),
+                "rot_mean": float('nan'),
+                "trans_median": float('nan'),
+                "trans_mean": float('nan')
+            }
+            
+            if method == "best":
+                all_scenes_summary[method]["standard_count"] = 0
+                all_scenes_summary[method]["hybrid_count"] = 0
+        else:
+            rot_values = [e for e in all_scenes_results[method]["rotation_errors"] if not np.isnan(e)]
+            trans_values = [e for e in all_scenes_results[method]["translation_errors"] if not np.isnan(e) and e != np.inf]
+            
+            if rot_values and trans_values:
+                rot_median = np.median(rot_values)
+                rot_mean = np.mean(rot_values)
+                trans_median = np.median(trans_values)
+                trans_mean = np.mean(trans_values)
+                
+                all_scenes_summary[method] = {
+                    "rot_median": rot_median,
+                    "rot_mean": rot_mean,
+                    "trans_median": trans_median,
+                    "trans_mean": trans_mean,
+                    "pairs_count": len(rot_values)
+                }
+                
+                if method == "best":
+                    all_scenes_summary[method]["standard_count"] = all_scenes_results[method]["method_counts"]["standard"]
+                    all_scenes_summary[method]["hybrid_count"] = all_scenes_results[method]["method_counts"]["hybrid"]
+            else:
+                all_scenes_summary[method] = {
+                    "pairs_count": 0,
+                    "rot_median": float('nan'),
+                    "rot_mean": float('nan'),
+                    "trans_median": float('nan'),
+                    "trans_mean": float('nan')
+                }
+                
+                if method == "best":
+                    all_scenes_summary[method]["standard_count"] = 0
+                    all_scenes_summary[method]["hybrid_count"] = 0
+    
+    # 将每个场景的详细结果写入摘要文件
+    with open(summary_file, "a") as f:
+        for scene in scenes:
+            if scene in scene_summaries:
+                summary = scene_summaries[scene]
+                
+                f.write(f"\n场景: {scene}\n")
+                f.write("-------------------------------------\n")
+                
+                for method in ["standard", "hybrid", "best"]:
+                    if method in summary:
+                        f.write(f"{method.capitalize()} 方法结果:\n")
+                        f.write(f"处理的图像对数量: {summary[method]['pairs_count']}\n")
+                        
+                        if method == "best":
+                            f.write(f"其中标准SIFT方法被选择: {summary[method]['standard_count']} 次\n")
+                            f.write(f"其中混合方法被选择: {summary[method]['hybrid_count']} 次\n")
+                        
+                        if summary[method]["pairs_count"] > 0:
+                            f.write(f"旋转误差中位数: {summary[method]['rot_median']:.4f} 度\n")
+                            f.write(f"旋转误差均值: {summary[method]['rot_mean']:.4f} 度\n")
+                            f.write(f"平移误差中位数: {summary[method]['trans_median']:.4f} 米\n")
+                            f.write(f"平移误差均值: {summary[method]['trans_mean']:.4f} 米\n\n")
+                        else:
+                            f.write("没有有效数据点用于计算统计结果\n\n")
+            else:
+                f.write(f"\n场景: {scene} - 未能获取结果\n\n")
+    
+    # 写入汇总结果
+    with open(summary_file, "a") as f:
+        f.write("\n全部场景汇总结果\n")
+        f.write("=====================================\n\n")
+        
+        for method in ["standard", "hybrid", "best"]:
+            if method in all_scenes_summary:
+                f.write(f"{method.capitalize()} 方法汇总结果:\n")
+                f.write(f"总有效图像对数量: {all_scenes_summary[method]['pairs_count']}\n")
+                
+                if method == "best":
+                    f.write(f"其中标准SIFT方法被选择: {all_scenes_summary[method]['standard_count']} 次\n")
+                    f.write(f"其中混合方法被选择: {all_scenes_summary[method]['hybrid_count']} 次\n")
+                
+                if all_scenes_summary[method]["pairs_count"] > 0:
+                    f.write(f"旋转误差中位数: {all_scenes_summary[method]['rot_median']:.4f} 度\n")
+                    f.write(f"旋转误差均值: {all_scenes_summary[method]['rot_mean']:.4f} 度\n")
+                    f.write(f"平移误差中位数: {all_scenes_summary[method]['trans_median']:.4f} 米\n")
+                    f.write(f"平移误差均值: {all_scenes_summary[method]['trans_mean']:.4f} 米\n\n")
+                else:
+                    f.write("没有有效数据点用于计算统计结果\n\n")
+    
+    # 打印汇总结果
+    print("\n全部场景汇总结果:")
+    print("=====================================")
+    
+    for method in ["standard", "hybrid", "best"]:
+        if method in all_scenes_summary:
+            print(f"\n{method.capitalize()} 方法汇总结果:")
+            print(f"总有效图像对数量: {all_scenes_summary[method]['pairs_count']}")
+            
+            if method == "best":
+                print(f"其中标准SIFT方法被选择: {all_scenes_summary[method]['standard_count']} 次")
+                print(f"其中混合方法被选择: {all_scenes_summary[method]['hybrid_count']} 次")
+            
+            if all_scenes_summary[method]["pairs_count"] > 0:
+                print(f"旋转误差中位数: {all_scenes_summary[method]['rot_median']:.4f} 度")
+                print(f"旋转误差均值: {all_scenes_summary[method]['rot_mean']:.4f} 度")
+                print(f"平移误差中位数: {all_scenes_summary[method]['trans_median']:.4f} 米")
+                print(f"平移误差均值: {all_scenes_summary[method]['trans_mean']:.4f} 米")
+            else:
+                print("没有有效数据点用于计算统计结果")
+    
+    print(f"\n所有结果已保存到: {summary_file}")
+    return all_scenes_summary
 
 def visualize_matches(img1, img2, kp1, kp2, final_matches):
     """可视化匹配结果"""

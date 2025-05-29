@@ -4,6 +4,9 @@ import torch
 import os
 import argparse
 from pathlib import Path
+import psutil
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 
 def get_device(device_str=None):
     """获取有效的设备字符串"""
@@ -586,13 +589,13 @@ def main():
                                 "structures . objects . landmarks"],
                         help="多个文本提示，程序将自动选择效果最好的")
     
-    # 设备参数
-    parser.add_argument("--device", type=str, default="", 
-                        help="运行模型的设备，例如：'cuda' 或 'cpu'。留空自动选择。")
-    
     # 输出路径参数
     parser.add_argument("--output-dir", type=str, default="results",
                         help="结果保存的目录路径")
+    
+    # 设备参数
+    parser.add_argument("--device", type=str, default="cuda:5",
+                        help="使用的设备")
     
     args = parser.parse_args()
     
@@ -602,16 +605,41 @@ def main():
     dino_weights = args.dino_weights if args.dino_weights else str(base_dir / "weights/groundingdino_swint_ogc.pth")
     sam_weights = args.sam_weights if args.sam_weights else str(base_dir / "weights/sam_vit_h_4b8939.pth")
     
-    # 确保device参数不为空
-    if args.device == "":
-        args.device = "cuda" if torch.cuda.is_available() else "cpu"
+    # 强制指定GPU 5
+    if torch.cuda.is_available():
+        torch.cuda.set_device(5)
+        device = "cuda:5"
+    else:
+        device = "cpu"
 
     # 运行语义引导SIFT位姿估计
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    memory_history = []
+    gpu_history = []
+
+    def record_mem():
+        memory_history.append(get_memory_usage())
+        gpu_history.append(get_gpu_memory_usage())
+
+    record_mem()  # 初始
     semantic_guided_sift_feature_matching(
         args.img1, args.img2, args.output_dir,
         dino_config, dino_weights, sam_weights,
-        args.text_prompts, args.device
+        args.text_prompts, device
     )
+    record_mem()
+
+    # 可视化
+    visualize_memory_usage(memory_history, gpu_history, output_dir)
+
+    # 保存为txt
+    with open(output_dir / 'memory_usage.txt', 'w') as f:
+        for i, (cpu, gpu) in enumerate(zip(memory_history, gpu_history)):
+            f.write(f'步骤{i}:\n')
+            f.write(f'  CPU: {cpu}\n')
+            f.write(f'  GPU: {gpu}\n')
 
 def visualize_matches(img1, img2, kp1, kp2, final_matches):
     """可视化匹配结果"""
@@ -619,6 +647,85 @@ def visualize_matches(img1, img2, kp1, kp2, final_matches):
                                 matchColor=(0, 255, 0), singlePointColor=(255, 0, 0),
                                 flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
     return result_img
+
+def get_memory_usage():
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info()
+    return {
+        "rss": mem.rss / 1024 / 1024,  # MB
+        "vms": mem.vms / 1024 / 1024,
+        "shared": mem.shared / 1024 / 1024,
+        "data": mem.data / 1024 / 1024,
+    }
+
+def get_gpu_memory_usage():
+    if not torch.cuda.is_available():
+        return {"total": 0, "allocated": 0, "reserved": 0, "free": 0}
+    device = torch.cuda.current_device()
+    total = torch.cuda.get_device_properties(device).total_memory / 1024 / 1024
+    reserved = torch.cuda.memory_reserved(device) / 1024 / 1024
+    allocated = torch.cuda.memory_allocated(device) / 1024 / 1024
+    free = total - reserved
+    return {
+        "total": total,
+        "reserved": reserved,
+        "allocated": allocated,
+        "free": free
+    }
+
+def visualize_memory_usage(memory_history, gpu_history, output_dir):
+    plt.figure(figsize=(15, 8))
+    gs = gridspec.GridSpec(2, 2, figure=plt.gcf())
+
+    # CPU
+    ax1 = plt.subplot(gs[0, 0])
+    steps = range(len(memory_history))
+    ax1.plot(steps, [m['rss'] for m in memory_history], label='RSS', marker='o')
+    ax1.plot(steps, [m['vms'] for m in memory_history], label='VMS', marker='s')
+    ax1.set_title('CPU Memory Trend')
+    ax1.set_xlabel('Step')
+    ax1.set_ylabel('MB')
+    ax1.legend()
+    ax1.grid(True)
+
+    # GPU
+    if gpu_history and gpu_history[0]['total'] > 0:
+        ax2 = plt.subplot(gs[0, 1])
+        ax2.plot(steps, [g['allocated'] for g in gpu_history], label='Allocated', marker='o')
+        ax2.plot(steps, [g['reserved'] for g in gpu_history], label='Reserved', marker='s')
+        ax2.set_title('GPU Memory Trend')
+        ax2.set_xlabel('Step')
+        ax2.set_ylabel('MB')
+        ax2.legend()
+        ax2.grid(True)
+
+    # Pie chart
+    ax3 = plt.subplot(gs[1, 0])
+    final = memory_history[-1]
+    labels = ['RSS', 'VMS', 'Shared', 'Data']
+    sizes = [final['rss'], final['vms'], final['shared'], final['data']]
+    ax3.pie(sizes, labels=labels, autopct='%1.1f%%')
+    ax3.set_title('Final CPU Memory Distribution')
+
+    if gpu_history and gpu_history[0]['total'] > 0:
+        ax4 = plt.subplot(gs[1, 1])
+        final_gpu = gpu_history[-1]
+        labels = ['Allocated', 'Reserved', 'Free']
+        sizes = [final_gpu['allocated'], final_gpu['reserved'], final_gpu['free']]
+        total = sum(sizes)
+        # 自定义autopct，显示小比例时用实际MB
+        def autopct_func(pct):
+            val = pct * total / 100.0
+            if pct < 1.0:
+                return f'{val:.2f}MB' if val > 0 else ''
+            else:
+                return f'{pct:.1f}%'
+        ax4.pie(sizes, labels=labels, autopct=autopct_func)
+        ax4.set_title('Final GPU Memory Distribution')
+
+    plt.tight_layout()
+    plt.savefig(str(output_dir / 'memory_usage.png'), dpi=300, bbox_inches='tight')
+    plt.close()
 
 if __name__ == "__main__":
     try:

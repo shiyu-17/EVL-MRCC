@@ -7,10 +7,23 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as patches
+import psutil
+import gc
+import sys
+from typing import Dict, Tuple, List
 
 def get_device(device_str=None):
     """获取有效的设备字符串"""
     if device_str and device_str.strip():
+        if device_str.startswith('cuda:'):
+            # 检查指定的GPU是否可用
+            gpu_id = int(device_str.split(':')[1])
+            if torch.cuda.is_available() and gpu_id < torch.cuda.device_count():
+                # 显式设置CUDA设备
+                torch.cuda.set_device(gpu_id)
+                return device_str
+            else:
+                print(f"警告: 指定的GPU {gpu_id} 不可用，将使用默认GPU")
         return device_str
     return "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -64,14 +77,24 @@ def compute_error(T_relative, T_icp, K, matches, kp1, kp2):
 def load_groundingdino_model(config_path, checkpoint_path):
     """加载Grounding-DINO模型"""
     from groundingdino.util.inference import load_model
-    return load_model(config_path, checkpoint_path)
+    model = load_model(config_path, checkpoint_path)
+    # 确保模型在正确的GPU上
+    if torch.cuda.is_available():
+        model = model.cuda()
+    return model
 
 def load_sam_model(sam_checkpoint, device=None):
     """加载SAM分割模型"""
     from segment_anything import sam_model_registry, SamPredictor
     # 确保device不为空
     if device is None or device == "":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda:5" if torch.cuda.is_available() else "cpu"
+    
+    # 获取GPU ID
+    if device.startswith('cuda:'):
+        gpu_id = int(device.split(':')[1])
+        torch.cuda.set_device(gpu_id)
+    
     sam = sam_model_registry["vit_h"](checkpoint=sam_checkpoint)
     sam.to(device=device)
     return SamPredictor(sam)
@@ -361,9 +384,8 @@ def visualize_academic_comparison(std_results, hybrid_results, output_dir):
     - hybrid_results: 语义引导SIFT结果字典
     - output_dir: 输出目录
     """
-    # 设置matplotlib支持英文字体
+    # 设置matplotlib使用衬线字体，不指定具体字体名称
     plt.rcParams['font.family'] = 'serif'
-    plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
     plt.rcParams['axes.unicode_minus'] = False
     
     # 创建输出目录
@@ -421,8 +443,8 @@ def visualize_academic_comparison(std_results, hybrid_results, output_dir):
             ax1.text(bar.get_x() + bar.get_width()/2., height + 0.05,
                     f'{height:.2f}°', ha='center', va='bottom', fontsize=10)
         
-        # 添加改进百分比标注
-        ax1.text(1, hybrid_rot_err/2, f"Improved\n{rot_improvement:.1f}%", 
+        # 添加改进百分比标注 - 修改位置到柱状图之间
+        ax1.text(0.5, std_rot_err/2, f"Improved\n{rot_improvement:.1f}%", 
                 ha='center', va='center', color='white', weight='bold', fontsize=11,
                 bbox=dict(facecolor=improved_color, alpha=0.8, boxstyle='round,pad=0.5'))
     
@@ -444,8 +466,8 @@ def visualize_academic_comparison(std_results, hybrid_results, output_dir):
             ax2.text(bar.get_x() + bar.get_width()/2., height + std_trans_err*0.02,
                     f'{height:.3f}m', ha='center', va='bottom', fontsize=10)
         
-        # 添加改进百分比标注
-        ax2.text(1, hybrid_trans_err/2, f"Improved\n{trans_improvement:.1f}%", 
+        # 添加改进百分比标注 - 修改位置到柱状图之间
+        ax2.text(0.5, std_trans_err/2, f"Improved\n{trans_improvement:.1f}%", 
                 ha='center', va='center', color='white', weight='bold', fontsize=11,
                 bbox=dict(facecolor=improved_color, alpha=0.8, boxstyle='round,pad=0.5'))
     
@@ -467,15 +489,16 @@ def visualize_academic_comparison(std_results, hybrid_results, output_dir):
             ax3.text(bar.get_x() + bar.get_width()/2., height + 1,
                     f'{int(height)}', ha='center', va='bottom', fontsize=10)
         
-        # 添加改进百分比标注
-        ax3.text(1, hybrid_matches_count/2, f"Increased\n{match_improvement:.1f}%", 
+        # 添加改进百分比标注 - 修改位置到柱状图之间
+        ax3.text(0.5, std_matches_count + (hybrid_matches_count - std_matches_count)/2, 
+                f"Increased\n{match_improvement:.1f}%", 
                 ha='center', va='center', color='white', weight='bold', fontsize=11,
                 bbox=dict(facecolor=improved_color, alpha=0.8, boxstyle='round,pad=0.5'))
     
     # 重置子图计数
     subplot_count = 0
     
-    # 4. 语义匹配点比例饼图
+    # 4. 将语义匹配点比例饼图改为柱状图
     ax4 = fig.add_subplot(gs[1, subplot_count])
     subplot_count += 1
     
@@ -487,14 +510,19 @@ def visualize_academic_comparison(std_results, hybrid_results, output_dir):
     if sizes[1] < 0: sizes[1] = 0
     if sum(sizes) == 0: sizes = [1, 1]  # 防止全零
     
-    print(f"饼图数据: 语义匹配 = {sizes[0]:.1f}%, 标准匹配 = {sizes[1]:.1f}%")
+    print(f"匹配类型数据: 语义匹配 = {sizes[0]:.1f}%, 标准匹配 = {sizes[1]:.1f}%")
     
-    explode = (0.1, 0)  # 突出语义匹配点
+    # 将饼图改为柱状图
     colors = ['#f39c12', '#95a5a6']  # 橙色和灰色
+    bars = ax4.bar(labels, sizes, color=colors)
     
-    ax4.pie(sizes, explode=explode, labels=labels, colors=colors,
-           autopct='%1.1f%%', shadow=False, startangle=90, textprops={'fontsize': 10})
-    ax4.axis('equal')  # 确保饼图是圆形
+    # 添加数值标签
+    for bar in bars:
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width()/2., height + 1,
+                f'{height:.1f}%', ha='center', va='bottom', fontsize=10)
+    
+    ax4.set_ylabel('Percentage (%)', fontsize=12)
     ax4.set_title('Match\nComposition', fontsize=14, weight='bold', pad=20)
     
     # 5. 误差改进百分比对比
@@ -567,11 +595,138 @@ def visualize_academic_comparison(std_results, hybrid_results, output_dir):
     print(f"Academic comparison chart saved to: {output_path}")
     return output_path
 
+def get_memory_usage() -> Dict[str, float]:
+    """获取当前进程的内存使用情况"""
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    return {
+        "rss": memory_info.rss / 1024 / 1024,  # 物理内存使用量 (MB)
+        "vms": memory_info.vms / 1024 / 1024,  # 虚拟内存使用量 (MB)
+        "shared": memory_info.shared / 1024 / 1024,  # 共享内存使用量 (MB)
+        "data": memory_info.data / 1024 / 1024,  # 数据段使用量 (MB)
+    }
+
+def get_gpu_memory_usage() -> Dict[str, float]:
+    """获取GPU内存使用情况"""
+    if not torch.cuda.is_available():
+        return {"total": 0, "used": 0, "free": 0}
+    
+    device = torch.cuda.current_device()
+    total = torch.cuda.get_device_properties(device).total_memory / 1024 / 1024  # MB
+    reserved = torch.cuda.memory_reserved(device) / 1024 / 1024  # MB
+    allocated = torch.cuda.memory_allocated(device) / 1024 / 1024  # MB
+    free = total - reserved
+    
+    return {
+        "total": total,
+        "reserved": reserved,
+        "allocated": allocated,
+        "free": free
+    }
+
+def estimate_model_size(model) -> float:
+    """估算模型参数大小（MB）"""
+    total_params = sum(p.numel() for p in model.parameters())
+    total_size = total_params * 4  # 假设每个参数是float32 (4 bytes)
+    return total_size / 1024 / 1024  # 转换为MB
+
+def analyze_feature_descriptors(kp: List, des: np.ndarray) -> Dict[str, float]:
+    """分析特征描述符的内存占用"""
+    if des is None:
+        return {"count": 0, "memory": 0}
+    
+    descriptor_size = des.nbytes / 1024 / 1024  # MB
+    return {
+        "count": len(kp),
+        "memory": descriptor_size,
+        "avg_size_per_descriptor": descriptor_size / len(kp) if len(kp) > 0 else 0
+    }
+
+def print_memory_report(title: str, memory_info: Dict[str, float], gpu_info: Dict[str, float] = None):
+    """打印内存使用报告"""
+    print(f"\n{title}")
+    print("=" * 50)
+    print("CPU内存使用:")
+    print(f"  物理内存 (RSS): {memory_info['rss']:.2f} MB")
+    print(f"  虚拟内存 (VMS): {memory_info['vms']:.2f} MB")
+    print(f"  共享内存: {memory_info['shared']:.2f} MB")
+    print(f"  数据段: {memory_info['data']:.2f} MB")
+    
+    if gpu_info and gpu_info["total"] > 0:
+        print("\nGPU内存使用:")
+        print(f"  总内存: {gpu_info['total']:.2f} MB")
+        print(f"  已分配: {gpu_info['allocated']:.2f} MB")
+        print(f"  已保留: {gpu_info['reserved']:.2f} MB")
+        print(f"  可用: {gpu_info['free']:.2f} MB")
+    print("=" * 50)
+
+def visualize_memory_usage(memory_history: List[Dict[str, float]], gpu_history: List[Dict[str, float]], output_dir: Path):
+    """可视化内存使用历史"""
+    plt.figure(figsize=(15, 10))
+    gs = gridspec.GridSpec(2, 2, figure=plt.gcf())
+    
+    # CPU内存使用趋势
+    ax1 = plt.subplot(gs[0, 0])
+    steps = range(len(memory_history))
+    ax1.plot(steps, [m['rss'] for m in memory_history], label='物理内存 (RSS)', marker='o')
+    ax1.plot(steps, [m['vms'] for m in memory_history], label='虚拟内存 (VMS)', marker='s')
+    ax1.plot(steps, [m['shared'] for m in memory_history], label='共享内存', marker='^')
+    ax1.plot(steps, [m['data'] for m in memory_history], label='数据段', marker='d')
+    ax1.set_title('CPU内存使用趋势')
+    ax1.set_xlabel('处理步骤')
+    ax1.set_ylabel('内存使用 (MB)')
+    ax1.legend()
+    ax1.grid(True)
+    
+    # GPU内存使用趋势
+    if gpu_history and gpu_history[0]['total'] > 0:
+        ax2 = plt.subplot(gs[0, 1])
+        ax2.plot(steps, [g['allocated'] for g in gpu_history], label='已分配内存', marker='o')
+        ax2.plot(steps, [g['reserved'] for g in gpu_history], label='已保留内存', marker='s')
+        ax2.plot(steps, [g['free'] for g in gpu_history], label='可用内存', marker='^')
+        ax2.set_title('GPU内存使用趋势')
+        ax2.set_xlabel('处理步骤')
+        ax2.set_ylabel('内存使用 (MB)')
+        ax2.legend()
+        ax2.grid(True)
+    
+    # 内存使用分布（饼图）
+    ax3 = plt.subplot(gs[1, 0])
+    final_memory = memory_history[-1]
+    labels = ['物理内存', '虚拟内存', '共享内存', '数据段']
+    sizes = [final_memory['rss'], final_memory['vms'], final_memory['shared'], final_memory['data']]
+    ax3.pie(sizes, labels=labels, autopct='%1.1f%%')
+    ax3.set_title('最终CPU内存分布')
+    
+    # GPU内存分布（饼图）
+    if gpu_history and gpu_history[0]['total'] > 0:
+        ax4 = plt.subplot(gs[1, 1])
+        final_gpu = gpu_history[-1]
+        labels = ['已分配', '已保留', '可用']
+        sizes = [final_gpu['allocated'], final_gpu['reserved'], final_gpu['free']]
+        ax4.pie(sizes, labels=labels, autopct='%1.1f%%')
+        ax4.set_title('最终GPU内存分布')
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'memory_usage.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
 def semantic_guided_sift_feature_matching(img1_path, img2_path, output_dir, dino_config, dino_weights, sam_weights, text_prompts, device=None):
     """使用语义标签指导的SIFT特征匹配和位姿估计"""
     # 创建输出目录
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
+    
+    # 记录内存使用历史
+    memory_history = []
+    gpu_history = []
+    
+    # 记录初始内存使用情况
+    initial_memory = get_memory_usage()
+    initial_gpu = get_gpu_memory_usage()
+    memory_history.append(initial_memory)
+    gpu_history.append(initial_gpu)
+    print_memory_report("初始内存使用情况", initial_memory, initial_gpu)
     
     # 相机内参
     fx, fy, cx, cy = 211.949, 211.949, 127.933, 95.9333
@@ -591,6 +746,19 @@ def semantic_guided_sift_feature_matching(img1_path, img2_path, output_dir, dino
     # 1. 标准SIFT特征匹配（作为对比基线）
     print("\n1. 运行标准SIFT特征匹配...")
     std_good_matches, std_kp1, std_kp2 = get_feature_matches(gray1, gray2)
+    
+    # 分析SIFT特征描述符内存使用
+    std_des1 = np.array([kp.descriptor for kp in std_kp1]) if std_kp1 else None
+    std_des2 = np.array([kp.descriptor for kp in std_kp2]) if std_kp2 else None
+    
+    std_desc_analysis1 = analyze_feature_descriptors(std_kp1, std_des1)
+    std_desc_analysis2 = analyze_feature_descriptors(std_kp2, std_des2)
+    
+    print("\nSIFT特征描述符分析:")
+    print(f"图像1: {std_desc_analysis1['count']} 个特征点, 占用 {std_desc_analysis1['memory']:.2f} MB")
+    print(f"图像2: {std_desc_analysis2['count']} 个特征点, 占用 {std_desc_analysis2['memory']:.2f} MB")
+    print(f"平均每个描述符大小: {std_desc_analysis1['avg_size_per_descriptor']:.2f} MB")
+    
     std_T, std_mask, std_good_matches = estimate_pose(std_good_matches, std_kp1, std_kp2, K)
     
     if std_T is not None:
@@ -615,8 +783,37 @@ def semantic_guided_sift_feature_matching(img1_path, img2_path, output_dir, dino
     device = get_device(device)
     print(f"使用设备: {device}")
     
+    # 记录模型加载前的内存使用
+    pre_model_memory = get_memory_usage()
+    pre_model_gpu = get_gpu_memory_usage()
+    print_memory_report("模型加载前内存使用情况", pre_model_memory, pre_model_gpu)
+    
+    # 加载模型
     grounding_dino_model = load_groundingdino_model(dino_config, dino_weights)
     sam_predictor = load_sam_model(sam_weights, device)
+    
+    # 估算模型大小
+    dino_size = estimate_model_size(grounding_dino_model)
+    sam_size = estimate_model_size(sam_predictor.model)
+    
+    print("\n模型大小估算:")
+    print(f"Grounding-DINO模型: {dino_size:.2f} MB")
+    print(f"SAM模型: {sam_size:.2f} MB")
+    print(f"总模型大小: {dino_size + sam_size:.2f} MB")
+    
+    # 记录模型加载后的内存使用
+    post_model_memory = get_memory_usage()
+    post_model_gpu = get_gpu_memory_usage()
+    print_memory_report("模型加载后内存使用情况", post_model_memory, post_model_gpu)
+    
+    # 计算内存增量
+    memory_increase = {
+        k: post_model_memory[k] - pre_model_memory[k] 
+        for k in post_model_memory.keys()
+    }
+    print("\n模型加载导致的内存增加:")
+    for k, v in memory_increase.items():
+        print(f"{k}: {v:.2f} MB")
     
     # 3. 尝试多个文本提示，选择最佳结果
     print("\n3. 尝试多个文本提示...")
@@ -655,6 +852,18 @@ def semantic_guided_sift_feature_matching(img1_path, img2_path, output_dir, dino
             gray1, gray2, mask1, mask2
         )
         
+        # 分析混合特征描述符内存使用
+        hybrid_des1 = np.array([kp.descriptor for kp in hybrid_kp1]) if hybrid_kp1 else None
+        hybrid_des2 = np.array([kp.descriptor for kp in hybrid_kp2]) if hybrid_kp2 else None
+        
+        hybrid_desc_analysis1 = analyze_feature_descriptors(hybrid_kp1, hybrid_des1)
+        hybrid_desc_analysis2 = analyze_feature_descriptors(hybrid_kp2, hybrid_des2)
+        
+        print("\n混合特征描述符分析:")
+        print(f"图像1: {hybrid_desc_analysis1['count']} 个特征点, 占用 {hybrid_desc_analysis1['memory']:.2f} MB")
+        print(f"图像2: {hybrid_desc_analysis2['count']} 个特征点, 占用 {hybrid_desc_analysis2['memory']:.2f} MB")
+        print(f"平均每个描述符大小: {hybrid_desc_analysis1['avg_size_per_descriptor']:.2f} MB")
+        
         # 估计位姿
         hybrid_T, hybrid_mask, hybrid_matches = estimate_pose(hybrid_matches, hybrid_kp1, hybrid_kp2, K)
         
@@ -675,6 +884,49 @@ def semantic_guided_sift_feature_matching(img1_path, img2_path, output_dir, dino
             
             cv2.imwrite(str(output_dir / f"image1_mask_{prompt.replace(' . ', '_')}.png"), mask1_overlay)
             cv2.imwrite(str(output_dir / f"image2_mask_{prompt.replace(' . ', '_')}.png"), mask2_overlay)
+    
+    # 记录最终内存使用情况
+    final_memory = get_memory_usage()
+    final_gpu = get_gpu_memory_usage()
+    memory_history.append(final_memory)
+    gpu_history.append(final_gpu)
+    
+    # 可视化内存使用情况
+    visualize_memory_usage(memory_history, gpu_history, output_dir)
+    
+    # 将内存使用情况写入结果文件
+    with open(output_dir / "memory_usage.txt", "w") as f:
+        f.write("内存使用分析报告\n")
+        f.write("=" * 50 + "\n\n")
+        
+        f.write("1. 模型大小估算:\n")
+        f.write(f"Grounding-DINO模型: {dino_size:.2f} MB\n")
+        f.write(f"SAM模型: {sam_size:.2f} MB\n\n")
+        
+        f.write("2. 特征描述符内存使用:\n")
+        f.write("标准SIFT特征:\n")
+        f.write(f"  图像1: {std_desc_analysis1['count']} 个特征点, {std_desc_analysis1['memory']:.2f} MB\n")
+        f.write(f"  图像2: {std_desc_analysis2['count']} 个特征点, {std_desc_analysis2['memory']:.2f} MB\n")
+        f.write(f"  平均每个描述符: {std_desc_analysis1['avg_size_per_descriptor']:.2f} MB\n\n")
+        
+        f.write("3. 内存使用变化:\n")
+        f.write("初始内存使用:\n")
+        for k, v in initial_memory.items():
+            f.write(f"  {k}: {v:.2f} MB\n")
+        
+        f.write("\n最终内存使用:\n")
+        for k, v in final_memory.items():
+            f.write(f"  {k}: {v:.2f} MB\n")
+        
+        f.write("\n总体内存增量:\n")
+        for k in final_memory.keys():
+            increase = final_memory[k] - initial_memory[k]
+            f.write(f"  {k}: {increase:.2f} MB\n")
+        
+        if final_gpu["total"] > 0:
+            f.write("\nGPU内存使用:\n")
+            for k, v in final_gpu.items():
+                f.write(f"  {k}: {v:.2f} MB\n")
     
     # 4. 评估混合特征匹配结果
     if best_hybrid_T is not None:
@@ -867,12 +1119,12 @@ def main():
                         help="多个文本提示，程序将自动选择效果最好的")
     
     # 设备参数
-    parser.add_argument("--device", type=str, default="", 
-                        help="运行模型的设备，例如：'cuda' 或 'cpu'。留空自动选择。")
+    parser.add_argument("--device", type=str, default="cuda:5", 
+                        help="运行模型的设备，例如：'cuda:5' 指定使用GPU 5，或 'cpu'。")
     
     # 输出路径参数
-    parser.add_argument("--output-dir", type=str, default="results",
-                        help="结果保存的目录路径")
+    parser.add_argument("--output-dir", type=str, default="", 
+                        help="结果保存的目录路径。留空则使用与输入图像相同的目录。")
     
     args = parser.parse_args()
     
@@ -884,11 +1136,39 @@ def main():
     
     # 确保device参数不为空
     if args.device == "":
-        args.device = "cuda" if torch.cuda.is_available() else "cpu"
+        args.device = "cuda:5" if torch.cuda.is_available() else "cpu"
+    
+    # 显式设置CUDA设备
+    if args.device.startswith('cuda:'):
+        gpu_id = int(args.device.split(':')[1])
+        if torch.cuda.is_available():
+            torch.cuda.set_device(gpu_id)
+            # 清空GPU缓存
+            torch.cuda.empty_cache()
+    
+    # 设置输出目录
+    if not args.output_dir:
+        # 使用第一张输入图像的目录作为输出目录
+        output_dir = Path(args.img1).parent / "visualization_results"
+    else:
+        output_dir = Path(args.output_dir)
+    
+    # 打印GPU信息
+    if torch.cuda.is_available():
+        print(f"\nGPU信息:")
+        print(f"可用GPU数量: {torch.cuda.device_count()}")
+        print(f"当前使用GPU: {args.device}")
+        print(f"当前CUDA设备: {torch.cuda.current_device()}")
+        print(f"GPU名称: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+        print(f"GPU总内存: {torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1024 / 1024:.2f} MB")
+        print(f"GPU可用内存: {torch.cuda.memory_allocated() / 1024 / 1024:.2f} MB 已分配")
+        print(f"GPU可用内存: {torch.cuda.memory_reserved() / 1024 / 1024:.2f} MB 已保留")
+    
+    print(f"\n输出目录: {output_dir}")
 
     # 运行语义引导SIFT位姿估计
     semantic_guided_sift_feature_matching(
-        args.img1, args.img2, args.output_dir,
+        args.img1, args.img2, output_dir,
         dino_config, dino_weights, sam_weights,
         args.text_prompts, args.device
     )

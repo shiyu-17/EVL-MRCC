@@ -1,3 +1,4 @@
+#python msg_evaluator.py --video_id 001 --model_path /home/dell3/lsy/MSG/exp-results/aomsg/LOG_DATE --split test --device 0 --output_dir ./evaluation_results/001
 import os
 import time
 import numpy as np
